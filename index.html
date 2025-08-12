@@ -151,14 +151,14 @@
         let EASE_FACTOR = 0.25;
         const MAX_ZOOM = 4.0;
         const MIN_ZOOM = 1.0;
-        const detectionInterval = 33; // ~30 FPS
+        let frameCount = 0;
+        const detectionFrameInterval = 5; // AI detekce na každém 5. snímku
 
         async function loadModel() {
             try {
                 model = await cocoSsd.load();
                 console.log('AI model načten.');
                 startRendering();
-                detectObjects();
             } catch (error) {
                 console.error('Nepodařilo se načíst AI model:', error);
             }
@@ -170,7 +170,12 @@
                     currentStream.getTracks().forEach(track => track.stop());
                 }
                 const constraints = {
-                    video: deviceId ? { deviceId: { exact: deviceId } } : true
+                    video: {
+                        deviceId: deviceId ? { exact: deviceId } : undefined,
+                        width: { ideal: 1280, min: 640 },
+                        height: { ideal: 720, min: 480 },
+                        frameRate: { ideal: 60, min: 30 }
+                    }
                 };
                 currentStream = await navigator.mediaDevices.getUserMedia(constraints);
                 hiddenVideo.srcObject = currentStream;
@@ -215,11 +220,7 @@
         }
 
         function startRendering() {
-            if ('requestVideoFrameCallback' in hiddenVideo) {
-                hiddenVideo.requestVideoFrameCallback(renderLoop);
-            } else {
-                requestAnimationFrame(renderLoop);
-            }
+            requestAnimationFrame(renderLoop);
         }
 
         function startRecording() {
@@ -300,11 +301,11 @@
                 context.fillText(`${trackedObject.class} (${Math.round(trackedObject.score * 100)}%)`, canvasX, canvasY > 10 ? canvasY - 5 : 10);
             }
 
-            if ('requestVideoFrameCallback' in hiddenVideo) {
-                hiddenVideo.requestVideoFrameCallback(renderLoop);
-            } else {
-                requestAnimationFrame(renderLoop);
+            if (frameCount % detectionFrameInterval === 0) {
+                detectObjects();
             }
+            frameCount++;
+            requestAnimationFrame(renderLoop);
         }
 
         async function detectObjects() {
@@ -352,7 +353,6 @@
                     targetPanY = hiddenVideo.videoHeight / 2;
                 }
             }
-            setTimeout(detectObjects, detectionInterval);
         }
 
         function updateZoomAndPan() {

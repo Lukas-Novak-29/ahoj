@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Živý obraz z kamery s nahráváním, zoomem a AI</title>
+    <title>Optimalizovaná webová kamera</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -112,11 +112,17 @@
         let videoInputs = [];
         let currentCameraIndex = 0;
         let model = null;
+        let isDetecting = false; // Nová proměnná pro řízení cyklu detekce
 
         // Asynchronní načtení modelu pro sledování objektů
         async function loadModel() {
-            model = await cocoSsd.load();
-            console.log('AI model načten.');
+            try {
+                model = await cocoSsd.load();
+                console.log('AI model načten.');
+                startDetection(); // Spustit detekci po načtení modelu
+            } catch (error) {
+                console.error('Nepodařilo se načíst AI model:', error);
+            }
         }
 
         async function getStream(deviceId) {
@@ -136,10 +142,6 @@
                     overlayCanvas.width = video.videoWidth;
                     overlayCanvas.height = video.videoHeight;
                     video.play();
-                    // Spuštění AI detekce, jakmile je video připraveno
-                    if (model) {
-                        detectObjects();
-                    }
                 };
             } catch (error) {
                 console.error('Přístup ke kameře byl odmítnut nebo nastala chyba:', error);
@@ -162,7 +164,6 @@
         }
 
         function startRecording() {
-            // Logika nahrávání zůstává stejná
             recordedChunks = [];
             mediaRecorder = new MediaRecorder(currentStream, { mimeType: 'video/webm' });
             mediaRecorder.ondataavailable = event => {
@@ -206,23 +207,31 @@
         function handleZoom() {
             const zoomValue = zoomSlider.value;
             video.style.transform = `scale(${zoomValue})`;
-            // Posun canvasu pro správné překrytí
-            const videoRect = video.getBoundingClientRect();
-            overlayCanvas.style.width = `${videoRect.width}px`;
-            overlayCanvas.style.height = `${videoRect.height}px`;
+            overlayCanvas.style.transform = `scale(${zoomValue})`;
+        }
+
+        // Nová funkce pro spuštění detekce s optimalizací
+        function startDetection() {
+            if (!isDetecting) {
+                isDetecting = true;
+                detectObjects();
+            }
+        }
+
+        // Nová funkce pro zastavení detekce
+        function stopDetection() {
+            isDetecting = false;
         }
 
         async function detectObjects() {
-            if (!model) {
+            if (!model || !isDetecting) {
                 return;
             }
-            // Použití AI modelu k detekci objektů
+
             const predictions = await model.detect(video);
             
-            // Vymazání plátna
             overlayContext.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
             
-            // Vykreslení výsledků
             predictions.forEach(prediction => {
                 const [x, y, width, height] = prediction.bbox;
                 overlayContext.beginPath();
@@ -238,16 +247,18 @@
                 overlayContext.fillText(`${prediction.class} (${Math.round(prediction.score * 100)}%)`, x, y > 10 ? y - 5 : 10);
             });
             
-            // Opakování detekce v každém snímku
-            requestAnimationFrame(detectObjects);
+            // Volání detekce s omezenou frekvencí (např. 1x za 200 ms)
+            setTimeout(() => {
+                requestAnimationFrame(detectObjects);
+            }, 200);
         }
 
         window.onload = () => {
             if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-                loadModel().then(() => {
-                    getCameras().then(() => {
-                        getStream(videoInputs[currentCameraIndex]?.deviceId);
-                    });
+                // Načtení AI modelu a spuštění kamery paralelně
+                loadModel();
+                getCameras().then(() => {
+                    getStream(videoInputs[currentCameraIndex]?.deviceId);
                 });
             } else {
                 alert('Váš prohlížeč nepodporuje přístup ke kameře.');

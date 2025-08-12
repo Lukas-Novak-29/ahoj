@@ -115,7 +115,6 @@
         <div id="recording-status" class="recording-indicator"></div>
     </div>
     <video id="hidden-video" style="display: none;"></video>
-
     <script>
         const canvas = document.getElementById('webcam-canvas');
         const context = canvas.getContext('2d');
@@ -137,7 +136,7 @@
         let model = null;
 
         let trackedObject = null;
-        let trackedObjectInfo = null; // Uloží informace o ručně vybraném objektu (třída, rozměry)
+        let trackedObjectInfo = null;
         let targetZoom = 1.0;
         let targetPanX = 0;
         let targetPanY = 0;
@@ -147,13 +146,13 @@
         const EASE_FACTOR = 0.1;
         const MAX_ZOOM = 4.0;
         const MIN_ZOOM = 1.0;
-        let autoDetect = true;
 
         async function loadModel() {
             try {
                 model = await cocoSsd.load();
                 console.log('AI model načten.');
                 startDetectionLoop();
+                renderLoop();
             } catch (error) {
                 console.error('Nepodařilo se načíst AI model:', error);
             }
@@ -245,7 +244,7 @@
             getStream(nextCameraId);
         }
 
-        function renderFrame() {
+        function renderLoop() {
             const videoWidth = hiddenVideo.videoWidth;
             const videoHeight = hiddenVideo.videoHeight;
             
@@ -281,18 +280,19 @@
                 context.fillText(`${trackedObject.class} (${Math.round(trackedObject.score * 100)}%)`, canvasX, canvasY > 10 ? canvasY - 5 : 10);
             }
             
-            requestAnimationFrame(renderFrame);
+            requestAnimationFrame(renderLoop);
         }
 
         async function startDetectionLoop() {
             if (!model) return;
-            const loop = async () => {
+            setInterval(async () => {
                 if (hiddenVideo.readyState >= 2) {
                     const predictions = await model.detect(hiddenVideo);
                     const selectedObject = objectSelector.value;
 
                     if (selectedObject === "none") {
                         trackedObject = null;
+                        trackedObjectInfo = null;
                         targetZoom = 1.0;
                         targetPanX = hiddenVideo.videoWidth / 2;
                         targetPanY = hiddenVideo.videoHeight / 2;
@@ -313,12 +313,12 @@
                                 trackedObjectInfo = trackedObject;
                                 updateZoomAndPan();
                             } else {
-                                targetZoom = parseFloat(zoomSlider.value);
+                                targetZoom = 1.0;
                                 targetPanX = hiddenVideo.videoWidth / 2;
                                 targetPanY = hiddenVideo.videoHeight / 2;
                             }
                         }
-                    } else { // Sledování automatického objektu
+                    } else {
                         const bestPrediction = predictions
                             .filter(p => p.class === selectedObject)
                             .sort((a, b) => b.score - a.score)[0];
@@ -327,18 +327,17 @@
                         if (trackedObject) {
                             updateZoomAndPan();
                         } else {
-                            targetZoom = parseFloat(zoomSlider.value);
+                            targetZoom = 1.0;
                             targetPanX = hiddenVideo.videoWidth / 2;
                             targetPanY = hiddenVideo.videoHeight / 2;
                         }
                     }
                 }
-                setTimeout(() => requestAnimationFrame(loop), 1000);
-            };
-            loop();
+            }, 100);
         }
 
         function updateZoomAndPan() {
+            if (!trackedObject) return;
             const [x, y, width, height] = trackedObject.bbox;
             const margin = parseFloat(marginSlider.value);
             
@@ -397,7 +396,6 @@
                 getCameras().then(() => {
                     getStream(videoInputs[currentCameraIndex]?.deviceId);
                 });
-                renderFrame();
             } else {
                 alert('Váš prohlížeč nepodporuje přístup ke kameře.');
             }
@@ -420,7 +418,6 @@
         });
         objectSelector.addEventListener('change', () => {
             if (objectSelector.value === "manual" || objectSelector.value === "none") {
-                autoDetect = false;
                 selectObjectBtn.disabled = objectSelector.value !== "manual";
                 if (objectSelector.value === "none") {
                     trackedObject = null;
@@ -430,7 +427,6 @@
                     targetPanY = hiddenVideo.videoHeight / 2;
                 }
             } else {
-                autoDetect = true;
                 selectObjectBtn.disabled = true;
                 trackedObjectInfo = null;
             }

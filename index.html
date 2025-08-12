@@ -220,7 +220,11 @@
         }
 
         function startRendering() {
-            requestAnimationFrame(renderLoop);
+            if ('requestVideoFrameCallback' in hiddenVideo) {
+                hiddenVideo.requestVideoFrameCallback(renderLoop);
+            } else {
+                requestAnimationFrame(renderLoop);
+            }
         }
 
         function startRecording() {
@@ -305,7 +309,12 @@
                 detectObjects();
             }
             frameCount++;
-            requestAnimationFrame(renderLoop);
+            
+            if ('requestVideoFrameCallback' in hiddenVideo) {
+                hiddenVideo.requestVideoFrameCallback(renderLoop);
+            } else {
+                requestAnimationFrame(renderLoop);
+            }
         }
 
         async function detectObjects() {

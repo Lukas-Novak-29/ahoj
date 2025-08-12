@@ -31,6 +31,7 @@
             gap: 15px;
             margin-top: 15px;
             justify-content: center;
+            flex-wrap: wrap;
         }
         button, label, select {
             padding: 10px 20px;
@@ -110,16 +111,20 @@
         let currentCameraIndex = 0;
         let model = null;
 
-        // Parametry pro sledování a zoom
         let trackedObject = null;
-        let zoom = 1.0;
-        let panX = 0;
-        let panY = 0;
+        let targetZoom = 1.0;
+        let targetPanX = 0;
+        let targetPanY = 0;
+        let currentZoom = 1.0;
+        let currentPanX = 0;
+        let currentPanY = 0;
 
         async function loadModel() {
             try {
+                // Načtení modelu pro AI
                 model = await cocoSsd.load();
                 console.log('AI model načten.');
+                // Spuštění smyčky detekce
                 startDetectionLoop();
             } catch (error) {
                 console.error('Nepodařilo se načíst AI model:', error);
@@ -128,6 +133,7 @@
 
         async function getStream(deviceId) {
             try {
+                // Zastavení aktuálního streamu, pokud existuje
                 if (currentStream) {
                     currentStream.getTracks().forEach(track => track.stop());
                 }
@@ -142,6 +148,10 @@
                     canvas.width = hiddenVideo.videoWidth;
                     canvas.height = hiddenVideo.videoHeight;
                     hiddenVideo.play();
+                    // Reset parametrů při spuštění nové kamery
+                    currentZoom = 1.0;
+                    currentPanX = hiddenVideo.videoWidth / 2;
+                    currentPanY = hiddenVideo.videoHeight / 2;
                 };
             } catch (error) {
                 console.error('Přístup ke kameře byl odmítnut nebo nastala chyba:', error);
@@ -208,51 +218,22 @@
         function renderFrame() {
             const videoWidth = hiddenVideo.videoWidth;
             const videoHeight = hiddenVideo.videoHeight;
+            const easeFactor = 0.1;
 
-            // Výpočet oříznuté a zvětšené oblasti na základě sledovaného objektu
-            let sourceX = 0;
-            let sourceY = 0;
-            let sourceWidth = videoWidth;
-            let sourceHeight = videoHeight;
+            // Plynulá aktualizace zoomu a posunu
+            currentZoom += (targetZoom - currentZoom) * easeFactor;
+            currentPanX += (targetPanX - currentPanX) * easeFactor;
+            currentPanY += (targetPanY - currentPanY) * easeFactor;
 
-            if (trackedObject) {
-                const [x, y, width, height] = trackedObject.bbox;
-
-                // Určení optimálního zoomu na základě velikosti objektu
-                const margin = 1.5; // Okraj kolem objektu
-                const targetZoom = Math.min(
-                    videoWidth / (width * margin),
-                    videoHeight / (height * margin),
-                    4.0 // Maximální zoom
-                );
-
-                // Plynulé přechody zoomu
-                zoom = zoom + (targetZoom - zoom) * 0.1;
-
-                sourceWidth = videoWidth / zoom;
-                sourceHeight = videoHeight / zoom;
-                
-                // Plynulé posunutí středu obrazu
-                const targetPanX = x + width / 2;
-                const targetPanY = y + height / 2;
-                panX = panX + (targetPanX - panX) * 0.2;
-                panY = panY + (targetPanY - panY) * 0.2;
-
-                sourceX = Math.max(0, Math.min(videoWidth - sourceWidth, panX - sourceWidth / 2));
-                sourceY = Math.max(0, Math.min(videoHeight - sourceHeight, panY - sourceHeight / 2));
-            } else {
-                // Není sledovaný objekt, nastavení zpět na původní parametry
-                zoom = zoom + (1.0 - zoom) * 0.1;
-                panX = videoWidth / 2;
-                panY = videoHeight / 2;
-                sourceWidth = videoWidth / zoom;
-                sourceHeight = videoHeight / zoom;
-                sourceX = (videoWidth - sourceWidth) / 2;
-                sourceY = (videoHeight - sourceHeight) / 2;
-            }
+            const sourceWidth = videoWidth / currentZoom;
+            const sourceHeight = videoHeight / currentZoom;
+            const sourceX = Math.max(0, Math.min(videoWidth - sourceWidth, currentPanX - sourceWidth / 2));
+            const sourceY = Math.max(0, Math.min(videoHeight - sourceHeight, currentPanY - sourceHeight / 2));
 
             context.clearRect(0, 0, canvas.width, canvas.height);
-            context.drawImage(hiddenVideo, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+            if (hiddenVideo.readyState >= 2) {
+                context.drawImage(hiddenVideo, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+            }
             
             // Vykreslení rámečku, pokud je objekt sledován
             if (trackedObject) {
@@ -266,9 +247,7 @@
                 context.rect(canvasX, canvasY, canvasWidth, canvasHeight);
                 context.lineWidth = 2;
                 context.strokeStyle = 'red';
-                context.fillStyle = 'rgba(255, 0, 0, 0.1)';
                 context.stroke();
-                context.fill();
                 
                 context.font = '16px Arial';
                 context.fillStyle = 'red';
@@ -286,16 +265,36 @@
                     const selectedObject = objectSelector.value;
                     
                     if (selectedObject !== "none") {
-                        // Nalezení nejlepšího objektu k sledování
                         const bestPrediction = predictions
                             .filter(p => p.class === selectedObject)
                             .sort((a, b) => b.score - a.score)[0];
                         trackedObject = bestPrediction;
+                        
+                        if (trackedObject) {
+                            const [x, y, width, height] = trackedObject.bbox;
+                            const margin = 1.6; // Přidá okraj okolo objektu
+                            targetZoom = Math.min(
+                                hiddenVideo.videoWidth / (width * margin),
+                                hiddenVideo.videoHeight / (height * margin),
+                                4.0 // Maximální zoom
+                            );
+                            targetPanX = x + width / 2;
+                            targetPanY = y + height / 2;
+                        } else {
+                            // Objekt nebyl nalezen, vrátíme se na původní zoom
+                            targetZoom = 1.0;
+                            targetPanX = hiddenVideo.videoWidth / 2;
+                            targetPanY = hiddenVideo.videoHeight / 2;
+                        }
                     } else {
                         trackedObject = null;
+                        targetZoom = 1.0;
+                        targetPanX = hiddenVideo.videoWidth / 2;
+                        targetPanY = hiddenVideo.videoHeight / 2;
                     }
                 }
-                setTimeout(() => requestAnimationFrame(loop), 250); // Omezení frekvence detekce
+                // Omezení detekce na 2x za sekundu
+                setTimeout(() => requestAnimationFrame(loop), 500);
             };
             loop();
         }

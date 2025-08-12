@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Živý obraz z kamery s nahráváním, zoomem a AI</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+            gap: 20px;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+        }
+        #webcam-video {
+            border: 2px solid #333;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            max-width: 90%;
+            background-color: black;
+        }
+        #overlay-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            border: 2px solid #333;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-top: 15px;
+        }
+        button, input[type="range"] {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            border: none;
+            border-radius: 5px;
+            background-color: #007bff;
+            color: white;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        #start-recording-btn, #stop-recording-btn {
+            background-color: #333;
+            color: white;
+        }
+        #start-recording-btn:hover, #stop-recording-btn:hover {
+            background-color: #111;
+        }
+        .recording-indicator {
+            width: 15px;
+            height: 15px;
+            background-color: red;
+            border-radius: 50%;
+            display: none;
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.1); opacity: 0.7; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+</head>
+<body>
+    <div class="container">
+        <video id="webcam-video" autoplay playsinline></video>
+        <canvas id="overlay-canvas"></canvas>
+        <div class="controls">
+            <button id="start-recording-btn">Nahrávat</button>
+            <button id="stop-recording-btn" disabled>Zastavit nahrávání</button>
+            <button id="switch-camera-btn">Přepnout kameru</button>
+            <input type="range" id="zoom-slider" min="1" max="4" step="0.1" value="1">
+            <div id="recording-status" class="recording-indicator"></div>
+        </div>
+    </div>
+
+    <script>
+        const video = document.getElementById('webcam-video');
+        const overlayCanvas = document.getElementById('overlay-canvas');
+        const overlayContext = overlayCanvas.getContext('2d');
+        const startBtn = document.getElementById('start-recording-btn');
+        const stopBtn = document.getElementById('stop-recording-btn');
+        const switchBtn = document.getElementById('switch-camera-btn');
+        const zoomSlider = document.getElementById('zoom-slider');
+        const recordingStatus = document.getElementById('recording-status');
+
+        let mediaRecorder;
+        let recordedChunks = [];
+        let currentStream;
+        let videoInputs = [];
+        let currentCameraIndex = 0;
+        let model = null;
+
+        // Asynchronní načtení modelu pro sledování objektů
+        async function loadModel() {
+            model = await cocoSsd.load();
+            console.log('AI model načten.');
+        }
+
+        async function getStream(deviceId) {
+            try {
+                if (currentStream) {
+                    currentStream.getTracks().forEach(track => track.stop());
+                }
+                const constraints = {
+                    video: deviceId ? { deviceId: { exact: deviceId } } : true
+                };
+                currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = currentStream;
+                startBtn.disabled = false;
+
+                // Nastavení rozměrů canvasu po načtení streamu
+                video.onloadedmetadata = () => {
+                    overlayCanvas.width = video.videoWidth;
+                    overlayCanvas.height = video.videoHeight;
+                    video.play();
+                    // Spuštění AI detekce, jakmile je video připraveno
+                    if (model) {
+                        detectObjects();
+                    }
+                };
+            } catch (error) {
+                console.error('Přístup ke kameře byl odmítnut nebo nastala chyba:', error);
+                alert('Přístup ke kameře byl zamítnut nebo nastala chyba. Zkontrolujte, zda jste aplikaci povolili přístup.');
+            }
+        }
+
+        async function getCameras() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+                alert('Váš prohlížeč nepodporuje výčet zařízení.');
+                return;
+            }
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            videoInputs = devices.filter(device => device.kind === 'videoinput');
+            if (videoInputs.length > 1) {
+                switchBtn.style.display = 'inline-block';
+            } else {
+                switchBtn.style.display = 'none';
+            }
+        }
+
+        function startRecording() {
+            // Logika nahrávání zůstává stejná
+            recordedChunks = [];
+            mediaRecorder = new MediaRecorder(currentStream, { mimeType: 'video/webm' });
+            mediaRecorder.ondataavailable = event => {
+                if (event.data.size > 0) {
+                    recordedChunks.push(event.data);
+                }
+            };
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                document.body.appendChild(a);
+                a.style = 'display: none';
+                a.href = url;
+                a.download = 'nahravka.webm';
+                a.click();
+                window.URL.revokeObjectURL(url);
+            };
+            mediaRecorder.start();
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            recordingStatus.style.display = 'block';
+            console.log('Nahrávání zahájeno...');
+        }
+
+        function stopRecording() {
+            mediaRecorder.stop();
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            recordingStatus.style.display = 'none';
+            console.log('Nahrávání zastaveno. Stahuji video...');
+        }
+
+        function switchCamera() {
+            if (videoInputs.length < 2) return;
+            currentCameraIndex = (currentCameraIndex + 1) % videoInputs.length;
+            const nextCameraId = videoInputs[currentCameraIndex].deviceId;
+            getStream(nextCameraId);
+        }
+
+        function handleZoom() {
+            const zoomValue = zoomSlider.value;
+            video.style.transform = `scale(${zoomValue})`;
+            // Posun canvasu pro správné překrytí
+            const videoRect = video.getBoundingClientRect();
+            overlayCanvas.style.width = `${videoRect.width}px`;
+            overlayCanvas.style.height = `${videoRect.height}px`;
+        }
+
+        async function detectObjects() {
+            if (!model) {
+                return;
+            }
+            // Použití AI modelu k detekci objektů
+            const predictions = await model.detect(video);
+            
+            // Vymazání plátna
+            overlayContext.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+            
+            // Vykreslení výsledků
+            predictions.forEach(prediction => {
+                const [x, y, width, height] = prediction.bbox;
+                overlayContext.beginPath();
+                overlayContext.rect(x, y, width, height);
+                overlayContext.lineWidth = 2;
+                overlayContext.strokeStyle = 'red';
+                overlayContext.fillStyle = 'rgba(255, 0, 0, 0.1)';
+                overlayContext.stroke();
+                overlayContext.fill();
+                
+                overlayContext.font = '16px Arial';
+                overlayContext.fillStyle = 'red';
+                overlayContext.fillText(`${prediction.class} (${Math.round(prediction.score * 100)}%)`, x, y > 10 ? y - 5 : 10);
+            });
+            
+            // Opakování detekce v každém snímku
+            requestAnimationFrame(detectObjects);
+        }
+
+        window.onload = () => {
+            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                loadModel().then(() => {
+                    getCameras().then(() => {
+                        getStream(videoInputs[currentCameraIndex]?.deviceId);
+                    });
+                });
+            } else {
+                alert('Váš prohlížeč nepodporuje přístup ke kameře.');
+            }
+        };
+
+        startBtn.addEventListener('click', startRecording);
+        stopBtn.addEventListener('click', stopRecording);
+        switchBtn.addEventListener('click', switchCamera);
+        zoomSlider.addEventListener('input', handleZoom);
+    </script>
+</body>
+</html>

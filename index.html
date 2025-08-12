@@ -152,7 +152,7 @@
         const MAX_ZOOM = 4.0;
         const MIN_ZOOM = 1.0;
         let frameCount = 0;
-        const detectionFrameInterval = 5; // AI detekce na každém 5. snímku
+        const detectionFrameInterval = 5;
 
         async function loadModel() {
             try {
@@ -247,7 +247,7 @@
             };
             mediaRecorder.start();
             startBtn.disabled = true;
-            stopBtn.disabled = true;
+            stopBtn.disabled = false;
             recordingStatus.style.display = 'block';
             console.log('Nahrávání zahájeno...');
         }

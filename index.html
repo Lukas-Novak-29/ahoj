@@ -172,8 +172,9 @@
                 const constraints = {
                     video: {
                         deviceId: deviceId ? { exact: deviceId } : undefined,
-                        width: { ideal: 1280, min: 640 },
-                        height: { ideal: 720, min: 480 },
+                        width: { ideal: 1920, min: 1280 },
+                        height: { ideal: 1080, min: 720 },
+                        aspectRatio: { exact: 16 / 9 },
                         frameRate: { ideal: 60, min: 30 }
                     }
                 };
@@ -182,11 +183,8 @@
                 startBtn.disabled = false;
 
                 hiddenVideo.onloadedmetadata = () => {
-                    const aspectRatio = hiddenVideo.videoWidth / hiddenVideo.videoHeight;
-                    const containerWidth = canvas.parentNode.offsetWidth;
-                    const newCanvasHeight = containerWidth / aspectRatio;
-                    canvas.width = containerWidth;
-                    canvas.height = newCanvasHeight;
+                    canvas.width = hiddenVideo.videoWidth;
+                    canvas.height = hiddenVideo.videoHeight;
                     hiddenVideo.play();
                     
                     currentZoom = 1.0;
@@ -249,7 +247,7 @@
             };
             mediaRecorder.start();
             startBtn.disabled = true;
-            stopBtn.disabled = false;
+            stopBtn.disabled = true;
             recordingStatus.style.display = 'block';
             console.log('Nahrávání zahájeno...');
         }

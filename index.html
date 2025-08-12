@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Webkamera s AI zoomem a manuálním ovládáním</title>
+    <title>Webkamera s inteligentním AI zoomem</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -26,7 +26,7 @@
             max-width: 90%;
             background-color: black;
             max-height: 70vh;
-            cursor: crosshair; /* Pro manuální výběr objektu */
+            cursor: crosshair;
         }
         .controls {
             display: flex;
@@ -99,7 +99,7 @@
         </div>
         <div class="control-group">
             <label for="margin-slider">Okraj (1.0 - 5.0):</label>
-            <input type="range" id="margin-slider" min="1.0" max="5.0" step="0.1" value="2.5">
+            <input type="range" id="margin-slider" min="1.0" max="5.0" step="0.1" value="3.5">
         </div>
         <label for="object-selector">Sledovat:</label>
         <select id="object-selector">
@@ -136,8 +136,8 @@
         let currentCameraIndex = 0;
         let model = null;
 
-        // Parametry pro sledování a zoom
         let trackedObject = null;
+        let trackedObjectInfo = null; // Uloží informace o ručně vybraném objektu (třída, rozměry)
         let targetZoom = 1.0;
         let targetPanX = 0;
         let targetPanY = 0;
@@ -249,7 +249,6 @@
             const videoWidth = hiddenVideo.videoWidth;
             const videoHeight = hiddenVideo.videoHeight;
             
-            // Plynulá aktualizace zoomu a posunu
             currentZoom += (targetZoom - currentZoom) * EASE_FACTOR;
             currentPanX += (targetPanX - currentPanX) * EASE_FACTOR;
             currentPanY += (targetPanY - currentPanY) * EASE_FACTOR;
@@ -264,7 +263,6 @@
                 context.drawImage(hiddenVideo, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
             }
             
-            // Vykreslení rámečku, pokud je objekt sledován
             if (trackedObject) {
                 const [x, y, width, height] = trackedObject.bbox;
                 const canvasX = (x - sourceX) * (canvas.width / sourceWidth);
@@ -289,55 +287,77 @@
         async function startDetectionLoop() {
             if (!model) return;
             const loop = async () => {
-                if (autoDetect && hiddenVideo.readyState >= 2) {
+                if (hiddenVideo.readyState >= 2) {
                     const predictions = await model.detect(hiddenVideo);
                     const selectedObject = objectSelector.value;
-                    
-                    if (selectedObject !== "none" && selectedObject !== "manual") {
+
+                    if (selectedObject === "none") {
+                        trackedObject = null;
+                        targetZoom = 1.0;
+                        targetPanX = hiddenVideo.videoWidth / 2;
+                        targetPanY = hiddenVideo.videoHeight / 2;
+                    } else if (selectedObject === "manual") {
+                        if (trackedObjectInfo) {
+                            const [x, y, width, height] = trackedObjectInfo.bbox;
+                            const currentBestMatch = predictions
+                                .filter(p => p.class === trackedObjectInfo.class)
+                                .sort((a, b) => {
+                                    const aDist = Math.sqrt(Math.pow(a.bbox[0] - x, 2) + Math.pow(a.bbox[1] - y, 2));
+                                    const bDist = Math.sqrt(Math.pow(b.bbox[0] - x, 2) + Math.pow(b.bbox[1] - y, 2));
+                                    return aDist - bDist;
+                                })[0];
+                            
+                            trackedObject = currentBestMatch;
+
+                            if (trackedObject) {
+                                trackedObjectInfo = trackedObject;
+                                updateZoomAndPan();
+                            } else {
+                                targetZoom = parseFloat(zoomSlider.value);
+                                targetPanX = hiddenVideo.videoWidth / 2;
+                                targetPanY = hiddenVideo.videoHeight / 2;
+                            }
+                        }
+                    } else { // Sledování automatického objektu
                         const bestPrediction = predictions
                             .filter(p => p.class === selectedObject)
                             .sort((a, b) => b.score - a.score)[0];
                         trackedObject = bestPrediction;
                         
                         if (trackedObject) {
-                            const [x, y, width, height] = trackedObject.bbox;
-                            const margin = parseFloat(marginSlider.value);
-                            
-                            const videoWidth = hiddenVideo.videoWidth;
-                            const videoHeight = hiddenVideo.videoHeight;
-                            
-                            const boxAspect = width / height;
-                            const videoAspect = videoWidth / videoHeight;
-
-                            let newZoom;
-                            if (boxAspect > videoAspect) {
-                                newZoom = videoWidth / (width * margin);
-                            } else {
-                                newZoom = videoHeight / (height * margin);
-                            }
-
-                            targetZoom = Math.min(Math.max(newZoom, MIN_ZOOM), MAX_ZOOM);
-                            targetPanX = x + width / 2;
-                            targetPanY = y + height / 2;
+                            updateZoomAndPan();
                         } else {
                             targetZoom = parseFloat(zoomSlider.value);
                             targetPanX = hiddenVideo.videoWidth / 2;
                             targetPanY = hiddenVideo.videoHeight / 2;
                         }
-                    } else {
-                        trackedObject = null;
-                        targetZoom = parseFloat(zoomSlider.value);
-                        targetPanX = hiddenVideo.videoWidth / 2;
-                        targetPanY = hiddenVideo.videoHeight / 2;
                     }
-                } else if (!autoDetect) {
-                    targetZoom = parseFloat(zoomSlider.value);
                 }
-                
-                // Omezení detekce na 1x za sekundu, pokud je zapnuta
-                setTimeout(() => requestAnimationFrame(loop), autoDetect ? 1000 : 16); 
+                setTimeout(() => requestAnimationFrame(loop), 1000);
             };
             loop();
+        }
+
+        function updateZoomAndPan() {
+            const [x, y, width, height] = trackedObject.bbox;
+            const margin = parseFloat(marginSlider.value);
+            
+            const videoWidth = hiddenVideo.videoWidth;
+            const videoHeight = hiddenVideo.videoHeight;
+            
+            const boxAspect = width / height;
+            const videoAspect = videoWidth / videoHeight;
+
+            let newZoom;
+            if (boxAspect > videoAspect) {
+                newZoom = videoWidth / (width * margin);
+            } else {
+                newZoom = videoHeight / (height * margin);
+            }
+
+            targetZoom = Math.min(Math.max(newZoom, MIN_ZOOM), MAX_ZOOM);
+            targetPanX = x + width / 2;
+            targetPanY = y + height / 2;
         }
 
         function findClosestObject(x, y) {
@@ -362,21 +382,11 @@
 
                 if (closestPrediction) {
                     trackedObject = closestPrediction;
-                    const [objX, objY, objW, objH] = closestPrediction.bbox;
-                    const margin = parseFloat(marginSlider.value);
-                    const boxAspect = objW / objH;
-                    const videoAspect = videoWidth / videoHeight;
-
-                    let newZoom;
-                    if (boxAspect > videoAspect) {
-                        newZoom = videoWidth / (objW * margin);
-                    } else {
-                        newZoom = videoHeight / (objH * margin);
-                    }
-
-                    targetZoom = Math.min(Math.max(newZoom, MIN_ZOOM), MAX_ZOOM);
-                    targetPanX = objX + objW / 2;
-                    targetPanY = objY + objH / 2;
+                    trackedObjectInfo = {
+                        class: closestPrediction.class,
+                        bbox: closestPrediction.bbox
+                    };
+                    updateZoomAndPan();
                 }
             });
         }
@@ -402,50 +412,41 @@
             }
         });
         marginSlider.addEventListener('input', () => {
-            if (objectSelector.value !== "none" && objectSelector.value !== "manual" && trackedObject) {
-                 // přepočítat targetZoom na základě nové hodnoty margin
-                 const [x, y, width, height] = trackedObject.bbox;
-                 const margin = parseFloat(marginSlider.value);
-                 const videoWidth = hiddenVideo.videoWidth;
-                 const videoHeight = hiddenVideo.videoHeight;
-                 const boxAspect = width / height;
-                 const videoAspect = videoWidth / videoHeight;
-
-                 let newZoom;
-                 if (boxAspect > videoAspect) {
-                     newZoom = videoWidth / (width * margin);
-                 } else {
-                     newZoom = videoHeight / (height * margin);
-                 }
-                 targetZoom = Math.min(Math.max(newZoom, MIN_ZOOM), MAX_ZOOM);
-            } else {
-                targetZoom = parseFloat(zoomSlider.value);
-            }
+             if (trackedObject) {
+                 updateZoomAndPan();
+             } else {
+                 targetZoom = parseFloat(zoomSlider.value);
+             }
         });
         objectSelector.addEventListener('change', () => {
-            autoDetect = objectSelector.value !== "manual" && objectSelector.value !== "none";
-            selectObjectBtn.disabled = objectSelector.value !== "manual";
-            if (!autoDetect) {
-                trackedObject = null;
-                targetZoom = parseFloat(zoomSlider.value);
-                targetPanX = hiddenVideo.videoWidth / 2;
-                targetPanY = hiddenVideo.videoHeight / 2;
+            if (objectSelector.value === "manual" || objectSelector.value === "none") {
+                autoDetect = false;
+                selectObjectBtn.disabled = objectSelector.value !== "manual";
+                if (objectSelector.value === "none") {
+                    trackedObject = null;
+                    trackedObjectInfo = null;
+                    targetZoom = parseFloat(zoomSlider.value);
+                    targetPanX = hiddenVideo.videoWidth / 2;
+                    targetPanY = hiddenVideo.videoHeight / 2;
+                }
+            } else {
+                autoDetect = true;
+                selectObjectBtn.disabled = true;
+                trackedObjectInfo = null;
             }
         });
         selectObjectBtn.addEventListener('click', () => {
-             // Dočasně vypnout autoDetekci pro manuální výběr
-             autoDetect = false;
-             canvas.style.cursor = 'crosshair';
-             canvas.onclick = (event) => {
-                 const rect = canvas.getBoundingClientRect();
-                 const x = event.clientX - rect.left;
-                 const y = event.clientY - rect.top;
-                 const videoX = (x / canvas.width) * hiddenVideo.videoWidth;
-                 const videoY = (y / canvas.height) * hiddenVideo.videoHeight;
-                 findClosestObject(videoX, videoY);
-                 canvas.style.cursor = 'default';
-                 canvas.onclick = null; // Odebrat handler po kliknutí
-             };
+            canvas.style.cursor = 'crosshair';
+            canvas.onclick = (event) => {
+                const rect = canvas.getBoundingClientRect();
+                const x = event.clientX - rect.left;
+                const y = event.clientY - rect.top;
+                const videoX = (x / canvas.width) * hiddenVideo.videoWidth;
+                const videoY = (y / canvas.height) * hiddenVideo.videoHeight;
+                findClosestObject(videoX, videoY);
+                canvas.style.cursor = 'default';
+                canvas.onclick = null;
+            };
         });
     </script>
 </body>

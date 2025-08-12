@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Optimalizovaná webová kamera</title>
+    <title>Webkamera s AI sledováním</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -17,32 +17,22 @@
             gap: 20px;
         }
         .container {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
             position: relative;
         }
-        #webcam-video {
+        #webcam-canvas {
             border: 2px solid #333;
             border-radius: 8px;
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
             max-width: 90%;
             background-color: black;
         }
-        #overlay-canvas {
-            position: absolute;
-            top: 0;
-            left: 0;
-            border: 2px solid #333;
-            border-radius: 8px;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-        }
         .controls {
             display: flex;
             gap: 15px;
             margin-top: 15px;
+            justify-content: center;
         }
-        button, input[type="range"] {
+        button, label, select {
             padding: 10px 20px;
             font-size: 16px;
             cursor: pointer;
@@ -52,7 +42,7 @@
             color: white;
             transition: background-color 0.3s;
         }
-        button:hover {
+        button:hover, label:hover, select:hover {
             background-color: #0056b3;
         }
         button:disabled {
@@ -85,25 +75,32 @@
 </head>
 <body>
     <div class="container">
-        <video id="webcam-video" autoplay playsinline></video>
-        <canvas id="overlay-canvas"></canvas>
-        <div class="controls">
-            <button id="start-recording-btn">Nahrávat</button>
-            <button id="stop-recording-btn" disabled>Zastavit nahrávání</button>
-            <button id="switch-camera-btn">Přepnout kameru</button>
-            <input type="range" id="zoom-slider" min="1" max="4" step="0.1" value="1">
-            <div id="recording-status" class="recording-indicator"></div>
-        </div>
+        <canvas id="webcam-canvas"></canvas>
     </div>
+    <div class="controls">
+        <button id="start-recording-btn">Nahrávat</button>
+        <button id="stop-recording-btn" disabled>Zastavit nahrávání</button>
+        <button id="switch-camera-btn">Přepnout kameru</button>
+        <label for="object-selector">Sledovat:</label>
+        <select id="object-selector">
+            <option value="person">Člověk</option>
+            <option value="dog">Pes</option>
+            <option value="cat">Kočka</option>
+            <option value="car">Auto</option>
+            <option value="none">Žádný</option>
+        </select>
+        <div id="recording-status" class="recording-indicator"></div>
+    </div>
+    <video id="hidden-video" style="display: none;"></video>
 
     <script>
-        const video = document.getElementById('webcam-video');
-        const overlayCanvas = document.getElementById('overlay-canvas');
-        const overlayContext = overlayCanvas.getContext('2d');
+        const canvas = document.getElementById('webcam-canvas');
+        const context = canvas.getContext('2d');
+        const hiddenVideo = document.getElementById('hidden-video');
         const startBtn = document.getElementById('start-recording-btn');
         const stopBtn = document.getElementById('stop-recording-btn');
         const switchBtn = document.getElementById('switch-camera-btn');
-        const zoomSlider = document.getElementById('zoom-slider');
+        const objectSelector = document.getElementById('object-selector');
         const recordingStatus = document.getElementById('recording-status');
 
         let mediaRecorder;
@@ -112,14 +109,18 @@
         let videoInputs = [];
         let currentCameraIndex = 0;
         let model = null;
-        let isDetecting = false; // Nová proměnná pro řízení cyklu detekce
 
-        // Asynchronní načtení modelu pro sledování objektů
+        // Parametry pro sledování a zoom
+        let trackedObject = null;
+        let zoom = 1.0;
+        let panX = 0;
+        let panY = 0;
+
         async function loadModel() {
             try {
                 model = await cocoSsd.load();
                 console.log('AI model načten.');
-                startDetection(); // Spustit detekci po načtení modelu
+                startDetectionLoop();
             } catch (error) {
                 console.error('Nepodařilo se načíst AI model:', error);
             }
@@ -134,14 +135,13 @@
                     video: deviceId ? { deviceId: { exact: deviceId } } : true
                 };
                 currentStream = await navigator.mediaDevices.getUserMedia(constraints);
-                video.srcObject = currentStream;
+                hiddenVideo.srcObject = currentStream;
                 startBtn.disabled = false;
 
-                // Nastavení rozměrů canvasu po načtení streamu
-                video.onloadedmetadata = () => {
-                    overlayCanvas.width = video.videoWidth;
-                    overlayCanvas.height = video.videoHeight;
-                    video.play();
+                hiddenVideo.onloadedmetadata = () => {
+                    canvas.width = hiddenVideo.videoWidth;
+                    canvas.height = hiddenVideo.videoHeight;
+                    hiddenVideo.play();
                 };
             } catch (error) {
                 console.error('Přístup ke kameře byl odmítnut nebo nastala chyba:', error);
@@ -165,7 +165,8 @@
 
         function startRecording() {
             recordedChunks = [];
-            mediaRecorder = new MediaRecorder(currentStream, { mimeType: 'video/webm' });
+            const canvasStream = canvas.captureStream();
+            mediaRecorder = new MediaRecorder(canvasStream, { mimeType: 'video/webm' });
             mediaRecorder.ondataavailable = event => {
                 if (event.data.size > 0) {
                     recordedChunks.push(event.data);
@@ -204,62 +205,108 @@
             getStream(nextCameraId);
         }
 
-        function handleZoom() {
-            const zoomValue = zoomSlider.value;
-            video.style.transform = `scale(${zoomValue})`;
-            overlayCanvas.style.transform = `scale(${zoomValue})`;
-        }
+        function renderFrame() {
+            const videoWidth = hiddenVideo.videoWidth;
+            const videoHeight = hiddenVideo.videoHeight;
 
-        // Nová funkce pro spuštění detekce s optimalizací
-        function startDetection() {
-            if (!isDetecting) {
-                isDetecting = true;
-                detectObjects();
-            }
-        }
+            // Výpočet oříznuté a zvětšené oblasti na základě sledovaného objektu
+            let sourceX = 0;
+            let sourceY = 0;
+            let sourceWidth = videoWidth;
+            let sourceHeight = videoHeight;
 
-        // Nová funkce pro zastavení detekce
-        function stopDetection() {
-            isDetecting = false;
-        }
+            if (trackedObject) {
+                const [x, y, width, height] = trackedObject.bbox;
 
-        async function detectObjects() {
-            if (!model || !isDetecting) {
-                return;
-            }
+                // Určení optimálního zoomu na základě velikosti objektu
+                const margin = 1.5; // Okraj kolem objektu
+                const targetZoom = Math.min(
+                    videoWidth / (width * margin),
+                    videoHeight / (height * margin),
+                    4.0 // Maximální zoom
+                );
 
-            const predictions = await model.detect(video);
-            
-            overlayContext.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-            
-            predictions.forEach(prediction => {
-                const [x, y, width, height] = prediction.bbox;
-                overlayContext.beginPath();
-                overlayContext.rect(x, y, width, height);
-                overlayContext.lineWidth = 2;
-                overlayContext.strokeStyle = 'red';
-                overlayContext.fillStyle = 'rgba(255, 0, 0, 0.1)';
-                overlayContext.stroke();
-                overlayContext.fill();
+                // Plynulé přechody zoomu
+                zoom = zoom + (targetZoom - zoom) * 0.1;
+
+                sourceWidth = videoWidth / zoom;
+                sourceHeight = videoHeight / zoom;
                 
-                overlayContext.font = '16px Arial';
-                overlayContext.fillStyle = 'red';
-                overlayContext.fillText(`${prediction.class} (${Math.round(prediction.score * 100)}%)`, x, y > 10 ? y - 5 : 10);
-            });
+                // Plynulé posunutí středu obrazu
+                const targetPanX = x + width / 2;
+                const targetPanY = y + height / 2;
+                panX = panX + (targetPanX - panX) * 0.2;
+                panY = panY + (targetPanY - panY) * 0.2;
+
+                sourceX = Math.max(0, Math.min(videoWidth - sourceWidth, panX - sourceWidth / 2));
+                sourceY = Math.max(0, Math.min(videoHeight - sourceHeight, panY - sourceHeight / 2));
+            } else {
+                // Není sledovaný objekt, nastavení zpět na původní parametry
+                zoom = zoom + (1.0 - zoom) * 0.1;
+                panX = videoWidth / 2;
+                panY = videoHeight / 2;
+                sourceWidth = videoWidth / zoom;
+                sourceHeight = videoHeight / zoom;
+                sourceX = (videoWidth - sourceWidth) / 2;
+                sourceY = (videoHeight - sourceHeight) / 2;
+            }
+
+            context.clearRect(0, 0, canvas.width, canvas.height);
+            context.drawImage(hiddenVideo, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
             
-            // Volání detekce s omezenou frekvencí (např. 1x za 200 ms)
-            setTimeout(() => {
-                requestAnimationFrame(detectObjects);
-            }, 200);
+            // Vykreslení rámečku, pokud je objekt sledován
+            if (trackedObject) {
+                const [x, y, width, height] = trackedObject.bbox;
+                const canvasX = (x - sourceX) * (canvas.width / sourceWidth);
+                const canvasY = (y - sourceY) * (canvas.height / sourceHeight);
+                const canvasWidth = width * (canvas.width / sourceWidth);
+                const canvasHeight = height * (canvas.height / sourceHeight);
+
+                context.beginPath();
+                context.rect(canvasX, canvasY, canvasWidth, canvasHeight);
+                context.lineWidth = 2;
+                context.strokeStyle = 'red';
+                context.fillStyle = 'rgba(255, 0, 0, 0.1)';
+                context.stroke();
+                context.fill();
+                
+                context.font = '16px Arial';
+                context.fillStyle = 'red';
+                context.fillText(`${trackedObject.class} (${Math.round(trackedObject.score * 100)}%)`, canvasX, canvasY > 10 ? canvasY - 5 : 10);
+            }
+            
+            requestAnimationFrame(renderFrame);
+        }
+
+        async function startDetectionLoop() {
+            if (!model) return;
+            const loop = async () => {
+                if (hiddenVideo.readyState >= 2) {
+                    const predictions = await model.detect(hiddenVideo);
+                    const selectedObject = objectSelector.value;
+                    
+                    if (selectedObject !== "none") {
+                        // Nalezení nejlepšího objektu k sledování
+                        const bestPrediction = predictions
+                            .filter(p => p.class === selectedObject)
+                            .sort((a, b) => b.score - a.score)[0];
+                        trackedObject = bestPrediction;
+                    } else {
+                        trackedObject = null;
+                    }
+                }
+                setTimeout(() => requestAnimationFrame(loop), 250); // Omezení frekvence detekce
+            };
+            loop();
         }
 
         window.onload = () => {
             if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-                // Načtení AI modelu a spuštění kamery paralelně
                 loadModel();
                 getCameras().then(() => {
                     getStream(videoInputs[currentCameraIndex]?.deviceId);
                 });
+                renderFrame();
             } else {
                 alert('Váš prohlížeč nepodporuje přístup ke kameře.');
             }
@@ -268,7 +315,6 @@
         startBtn.addEventListener('click', startRecording);
         stopBtn.addEventListener('click', stopRecording);
         switchBtn.addEventListener('click', switchCamera);
-        zoomSlider.addEventListener('input', handleZoom);
     </script>
 </body>
 </html>

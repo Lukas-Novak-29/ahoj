@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Webkamera s AI zoomem</title>
+    <title>Webkamera s AI zoomem a manuálním ovládáním</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -25,7 +25,8 @@
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
             max-width: 90%;
             background-color: black;
-            max-height: 70vh; /* Omezení, aby se vešlo na menší obrazovky */
+            max-height: 70vh;
+            cursor: crosshair; /* Pro manuální výběr objektu */
         }
         .controls {
             display: flex;
@@ -33,6 +34,15 @@
             margin-top: 15px;
             justify-content: center;
             flex-wrap: wrap;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 5px;
+        }
+        input[type="range"] {
+            width: 150px;
         }
         button, label, select {
             padding: 10px 20px;
@@ -83,14 +93,25 @@
         <button id="start-recording-btn">Nahrávat</button>
         <button id="stop-recording-btn" disabled>Zastavit nahrávání</button>
         <button id="switch-camera-btn">Přepnout kameru</button>
+        <div class="control-group">
+            <label for="zoom-slider">Zoom (1x - 4x):</label>
+            <input type="range" id="zoom-slider" min="1.0" max="4.0" step="0.1" value="1.0">
+        </div>
+        <div class="control-group">
+            <label for="margin-slider">Okraj (1.0 - 5.0):</label>
+            <input type="range" id="margin-slider" min="1.0" max="5.0" step="0.1" value="2.5">
+        </div>
         <label for="object-selector">Sledovat:</label>
         <select id="object-selector">
             <option value="person">Člověk</option>
             <option value="dog">Pes</option>
             <option value="cat">Kočka</option>
             <option value="car">Auto</option>
+            <option value="ball">Míček</option>
             <option value="none">Žádný</option>
+            <option value="manual">Manuálně</option>
         </select>
+        <button id="select-object-btn">Vybrat objekt</button>
         <div id="recording-status" class="recording-indicator"></div>
     </div>
     <video id="hidden-video" style="display: none;"></video>
@@ -103,6 +124,9 @@
         const stopBtn = document.getElementById('stop-recording-btn');
         const switchBtn = document.getElementById('switch-camera-btn');
         const objectSelector = document.getElementById('object-selector');
+        const selectObjectBtn = document.getElementById('select-object-btn');
+        const zoomSlider = document.getElementById('zoom-slider');
+        const marginSlider = document.getElementById('margin-slider');
         const recordingStatus = document.getElementById('recording-status');
 
         let mediaRecorder;
@@ -120,16 +144,15 @@
         let currentZoom = 1.0;
         let currentPanX = 0;
         let currentPanY = 0;
-        const EASE_FACTOR = 0.1; // Rychlost plynulého přechodu
+        const EASE_FACTOR = 0.1;
         const MAX_ZOOM = 4.0;
         const MIN_ZOOM = 1.0;
+        let autoDetect = true;
 
         async function loadModel() {
             try {
-                // Načtení modelu pro AI
                 model = await cocoSsd.load();
                 console.log('AI model načten.');
-                // Spuštění smyčky detekce
                 startDetectionLoop();
             } catch (error) {
                 console.error('Nepodařilo se načíst AI model:', error);
@@ -138,7 +161,6 @@
 
         async function getStream(deviceId) {
             try {
-                // Zastavení aktuálního streamu, pokud existuje
                 if (currentStream) {
                     currentStream.getTracks().forEach(track => track.stop());
                 }
@@ -150,7 +172,6 @@
                 startBtn.disabled = false;
 
                 hiddenVideo.onloadedmetadata = () => {
-                    // Zachování poměru stran
                     const aspectRatio = hiddenVideo.videoWidth / hiddenVideo.videoHeight;
                     const containerWidth = canvas.parentNode.offsetWidth;
                     const newCanvasHeight = containerWidth / aspectRatio;
@@ -158,7 +179,6 @@
                     canvas.height = newCanvasHeight;
                     hiddenVideo.play();
                     
-                    // Reset parametrů při spuštění nové kamery
                     currentZoom = 1.0;
                     currentPanX = hiddenVideo.videoWidth / 2;
                     currentPanY = hiddenVideo.videoHeight / 2;
@@ -269,11 +289,11 @@
         async function startDetectionLoop() {
             if (!model) return;
             const loop = async () => {
-                if (hiddenVideo.readyState >= 2) {
+                if (autoDetect && hiddenVideo.readyState >= 2) {
                     const predictions = await model.detect(hiddenVideo);
                     const selectedObject = objectSelector.value;
                     
-                    if (selectedObject !== "none") {
+                    if (selectedObject !== "none" && selectedObject !== "manual") {
                         const bestPrediction = predictions
                             .filter(p => p.class === selectedObject)
                             .sort((a, b) => b.score - a.score)[0];
@@ -281,7 +301,7 @@
                         
                         if (trackedObject) {
                             const [x, y, width, height] = trackedObject.bbox;
-                            const margin = 1.8; // Zvětšení okraje okolo objektu, aby bylo vidět okolí
+                            const margin = parseFloat(marginSlider.value);
                             
                             const videoWidth = hiddenVideo.videoWidth;
                             const videoHeight = hiddenVideo.videoHeight;
@@ -300,22 +320,65 @@
                             targetPanX = x + width / 2;
                             targetPanY = y + height / 2;
                         } else {
-                            // Objekt nebyl nalezen, vrátíme se na původní zoom
-                            targetZoom = 1.0;
+                            targetZoom = parseFloat(zoomSlider.value);
                             targetPanX = hiddenVideo.videoWidth / 2;
                             targetPanY = hiddenVideo.videoHeight / 2;
                         }
                     } else {
                         trackedObject = null;
-                        targetZoom = 1.0;
+                        targetZoom = parseFloat(zoomSlider.value);
                         targetPanX = hiddenVideo.videoWidth / 2;
                         targetPanY = hiddenVideo.videoHeight / 2;
                     }
+                } else if (!autoDetect) {
+                    targetZoom = parseFloat(zoomSlider.value);
                 }
-                // Omezení detekce na 1x za sekundu
-                setTimeout(() => requestAnimationFrame(loop), 1000);
+                
+                // Omezení detekce na 1x za sekundu, pokud je zapnuta
+                setTimeout(() => requestAnimationFrame(loop), autoDetect ? 1000 : 16); 
             };
             loop();
+        }
+
+        function findClosestObject(x, y) {
+            if (!model || hiddenVideo.readyState < 2) return;
+            model.detect(hiddenVideo).then(predictions => {
+                let minDistance = Infinity;
+                let closestPrediction = null;
+                const videoWidth = hiddenVideo.videoWidth;
+                const videoHeight = hiddenVideo.videoHeight;
+
+                predictions.forEach(p => {
+                    const [objX, objY, objW, objH] = p.bbox;
+                    const centerX = objX + objW / 2;
+                    const centerY = objY + objH / 2;
+                    
+                    const dist = Math.sqrt(Math.pow(centerX - x, 2) + Math.pow(centerY - y, 2));
+                    if (dist < minDistance) {
+                        minDistance = dist;
+                        closestPrediction = p;
+                    }
+                });
+
+                if (closestPrediction) {
+                    trackedObject = closestPrediction;
+                    const [objX, objY, objW, objH] = closestPrediction.bbox;
+                    const margin = parseFloat(marginSlider.value);
+                    const boxAspect = objW / objH;
+                    const videoAspect = videoWidth / videoHeight;
+
+                    let newZoom;
+                    if (boxAspect > videoAspect) {
+                        newZoom = videoWidth / (objW * margin);
+                    } else {
+                        newZoom = videoHeight / (objH * margin);
+                    }
+
+                    targetZoom = Math.min(Math.max(newZoom, MIN_ZOOM), MAX_ZOOM);
+                    targetPanX = objX + objW / 2;
+                    targetPanY = objY + objH / 2;
+                }
+            });
         }
 
         window.onload = () => {
@@ -333,6 +396,57 @@
         startBtn.addEventListener('click', startRecording);
         stopBtn.addEventListener('click', stopRecording);
         switchBtn.addEventListener('click', switchCamera);
+        zoomSlider.addEventListener('input', () => {
+            if (objectSelector.value === "none" || objectSelector.value === "manual") {
+                targetZoom = parseFloat(zoomSlider.value);
+            }
+        });
+        marginSlider.addEventListener('input', () => {
+            if (objectSelector.value !== "none" && objectSelector.value !== "manual" && trackedObject) {
+                 // přepočítat targetZoom na základě nové hodnoty margin
+                 const [x, y, width, height] = trackedObject.bbox;
+                 const margin = parseFloat(marginSlider.value);
+                 const videoWidth = hiddenVideo.videoWidth;
+                 const videoHeight = hiddenVideo.videoHeight;
+                 const boxAspect = width / height;
+                 const videoAspect = videoWidth / videoHeight;
+
+                 let newZoom;
+                 if (boxAspect > videoAspect) {
+                     newZoom = videoWidth / (width * margin);
+                 } else {
+                     newZoom = videoHeight / (height * margin);
+                 }
+                 targetZoom = Math.min(Math.max(newZoom, MIN_ZOOM), MAX_ZOOM);
+            } else {
+                targetZoom = parseFloat(zoomSlider.value);
+            }
+        });
+        objectSelector.addEventListener('change', () => {
+            autoDetect = objectSelector.value !== "manual" && objectSelector.value !== "none";
+            selectObjectBtn.disabled = objectSelector.value !== "manual";
+            if (!autoDetect) {
+                trackedObject = null;
+                targetZoom = parseFloat(zoomSlider.value);
+                targetPanX = hiddenVideo.videoWidth / 2;
+                targetPanY = hiddenVideo.videoHeight / 2;
+            }
+        });
+        selectObjectBtn.addEventListener('click', () => {
+             // Dočasně vypnout autoDetekci pro manuální výběr
+             autoDetect = false;
+             canvas.style.cursor = 'crosshair';
+             canvas.onclick = (event) => {
+                 const rect = canvas.getBoundingClientRect();
+                 const x = event.clientX - rect.left;
+                 const y = event.clientY - rect.top;
+                 const videoX = (x / canvas.width) * hiddenVideo.videoWidth;
+                 const videoY = (y / canvas.height) * hiddenVideo.videoHeight;
+                 findClosestObject(videoX, videoY);
+                 canvas.style.cursor = 'default';
+                 canvas.onclick = null; // Odebrat handler po kliknutí
+             };
+        });
     </script>
 </body>
 </html>

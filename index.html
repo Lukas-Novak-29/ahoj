@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Webkamera s AI sledováním</title>
+    <title>Webkamera s AI zoomem</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -25,6 +25,7 @@
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
             max-width: 90%;
             background-color: black;
+            max-height: 70vh; /* Omezení, aby se vešlo na menší obrazovky */
         }
         .controls {
             display: flex;
@@ -111,6 +112,7 @@
         let currentCameraIndex = 0;
         let model = null;
 
+        // Parametry pro sledování a zoom
         let trackedObject = null;
         let targetZoom = 1.0;
         let targetPanX = 0;
@@ -118,6 +120,9 @@
         let currentZoom = 1.0;
         let currentPanX = 0;
         let currentPanY = 0;
+        const EASE_FACTOR = 0.1; // Rychlost plynulého přechodu
+        const MAX_ZOOM = 4.0;
+        const MIN_ZOOM = 1.0;
 
         async function loadModel() {
             try {
@@ -145,9 +150,14 @@
                 startBtn.disabled = false;
 
                 hiddenVideo.onloadedmetadata = () => {
-                    canvas.width = hiddenVideo.videoWidth;
-                    canvas.height = hiddenVideo.videoHeight;
+                    // Zachování poměru stran
+                    const aspectRatio = hiddenVideo.videoWidth / hiddenVideo.videoHeight;
+                    const containerWidth = canvas.parentNode.offsetWidth;
+                    const newCanvasHeight = containerWidth / aspectRatio;
+                    canvas.width = containerWidth;
+                    canvas.height = newCanvasHeight;
                     hiddenVideo.play();
+                    
                     // Reset parametrů při spuštění nové kamery
                     currentZoom = 1.0;
                     currentPanX = hiddenVideo.videoWidth / 2;
@@ -218,12 +228,11 @@
         function renderFrame() {
             const videoWidth = hiddenVideo.videoWidth;
             const videoHeight = hiddenVideo.videoHeight;
-            const easeFactor = 0.1;
-
+            
             // Plynulá aktualizace zoomu a posunu
-            currentZoom += (targetZoom - currentZoom) * easeFactor;
-            currentPanX += (targetPanX - currentPanX) * easeFactor;
-            currentPanY += (targetPanY - currentPanY) * easeFactor;
+            currentZoom += (targetZoom - currentZoom) * EASE_FACTOR;
+            currentPanX += (targetPanX - currentPanX) * EASE_FACTOR;
+            currentPanY += (targetPanY - currentPanY) * EASE_FACTOR;
 
             const sourceWidth = videoWidth / currentZoom;
             const sourceHeight = videoHeight / currentZoom;
@@ -272,12 +281,22 @@
                         
                         if (trackedObject) {
                             const [x, y, width, height] = trackedObject.bbox;
-                            const margin = 1.6; // Přidá okraj okolo objektu
-                            targetZoom = Math.min(
-                                hiddenVideo.videoWidth / (width * margin),
-                                hiddenVideo.videoHeight / (height * margin),
-                                4.0 // Maximální zoom
-                            );
+                            const margin = 1.8; // Zvětšení okraje okolo objektu, aby bylo vidět okolí
+                            
+                            const videoWidth = hiddenVideo.videoWidth;
+                            const videoHeight = hiddenVideo.videoHeight;
+                            
+                            const boxAspect = width / height;
+                            const videoAspect = videoWidth / videoHeight;
+
+                            let newZoom;
+                            if (boxAspect > videoAspect) {
+                                newZoom = videoWidth / (width * margin);
+                            } else {
+                                newZoom = videoHeight / (height * margin);
+                            }
+
+                            targetZoom = Math.min(Math.max(newZoom, MIN_ZOOM), MAX_ZOOM);
                             targetPanX = x + width / 2;
                             targetPanY = y + height / 2;
                         } else {
@@ -293,8 +312,8 @@
                         targetPanY = hiddenVideo.videoHeight / 2;
                     }
                 }
-                // Omezení detekce na 2x za sekundu
-                setTimeout(() => requestAnimationFrame(loop), 500);
+                // Omezení detekce na 1x za sekundu
+                setTimeout(() => requestAnimationFrame(loop), 1000);
             };
             loop();
         }
